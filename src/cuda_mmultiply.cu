@@ -37,7 +37,7 @@ __global__ void kern(int *sm){
 
 template<typename T>
 __global__
-void naive_matrix_multiply(T *A, T *B, T* C, int width, int C_rows, int C_cols)
+void naive_matrix_multiply(T *A, T *B, T* C, int width, int C_rows, int C_cols, int* sm)
 {
   int row = blockIdx.y * blockDim.y + threadIdx.y;   
   int col = blockIdx.x * blockDim.x + threadIdx.x;
@@ -51,7 +51,7 @@ void naive_matrix_multiply(T *A, T *B, T* C, int width, int C_rows, int C_cols)
     // store result
     C[row * C_cols + col] = value;    
   }
-  //sm[blockIdx.x]=get_smid();
+  sm[row * C_cols + col]=get_smid();
   
 
 }
@@ -123,11 +123,14 @@ int main(void)
   float *Y = new float[Y_size]; 
   float *Z = new float[Z_size];
   float *Z_cpu = new float[Z_size];
+  int *sm = new int[Z_size];
   
   // Allocate Unified Memory – accessible from CPU or GPU
   cudaMallocManaged(&X, X_size*sizeof(float));
   cudaMallocManaged(&Y, Y_size*sizeof(float));
   cudaMallocManaged(&Z, Z_size*sizeof(float));
+  cudaMallocManaged(&sm, Z_size*sizeof(int));
+
   
   // Fill the matrix values from xtensor to C++ array
   for (int i = 0; i < X_size; i++)
@@ -167,7 +170,7 @@ int main(void)
   std::cout << "BLCK SIZE: " << COL_TILE_WIDTH << " , " << ROW_TILE_WIDTH << std::endl;
 
 
-  naive_matrix_multiply<float><<<dim_grid, dim_block>>>(X, Y, Z, X_cols, Z_rows, Z_cols);
+  naive_matrix_multiply<float><<<dim_grid, dim_block>>>(X, Y, Z, X_cols, Z_rows, Z_cols, sm);
 
   // Wait for GPU to finish before accessing on host
   cudaDeviceSynchronize();
@@ -191,6 +194,12 @@ int main(void)
     std::cout << "PASS" << std::endl;
   else
     std::cout << "FAIL" << std::endl;
+    
+// Convert product matrix to xtensor
+  xt::xarray<int> SM_ID = xt::adapt(sm, Z_size, matrix_Z_shape);
+  std::cout<<"SM ID"<<std::endl;
+  std::cout<<SM_ID<<std::endl;
+  std::cout<<"**********************"<<std::endl;
     
 
   // Free memory
