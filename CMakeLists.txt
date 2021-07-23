@@ -7,8 +7,8 @@ project(cuda_mmultiply
     LANGUAGES CXX CUDA)
     
 # specify the C++ standard
-set(CMAKE_CXX_STANDARD 17)
-SET(CMAKE_CXX_COMPILER //opt/nvidia/hpc_sdk/Linux_x86_64/21.5/compilers/bin/nvc++)
+set(CMAKE_CXX_STANDARD 14)
+SET(CMAKE_CXX_COMPILER nvc++)
 
 find_package(xtl REQUIRED)
 find_package(xtensor REQUIRED)

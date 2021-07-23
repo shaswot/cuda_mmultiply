@@ -1,10 +1,23 @@
 // https://github.com/charitha22/workspace/blob/master/cuda/mm/naive_matrix_multiply.cu
 
+#include <istream>
 #include <iostream>
+#include <fstream>
+
+#include <stddef.h>
+#include <typeinfo>
+#include <stdexcept>
+
 #include <math.h>
 #include <functional>
 #include <stdlib.h>     /* srand, rand */
 #include <time.h>       /* time */
+
+#include <xtensor/xarray.hpp>
+#include <xtensor/xio.hpp>
+#include <xtensor/xview.hpp>
+#include <xtensor/xnpy.hpp>
+#include <xtensor/xsort.hpp>
 
 #define ROW_TILE_WIDTH 32
 #define COL_TILE_WIDTH 32
@@ -65,77 +78,71 @@ bool check_equal(T* A1, T* A2, int rows, int cols){
 
 int main(void)
 {
-  int A_rows = 1 << 8;
-  int A_cols = 1 << 10;
-  int B_rows = A_cols;
-  int B_cols = 1 << 12;
-  int C_rows = A_rows;
-  int C_cols = B_cols;
-  int A_size = A_rows * A_cols;
-  int B_size = B_rows * B_cols;
-  int C_size = C_rows * C_cols;
+    
+  // load weights from npy files
+    
+  xt::xarray<float> matrix_X = xt::load_npy<float>("../data/random_matrix.npy");
+  xt::xarray<float> matrix_Y = xt::load_npy<float>("../data/random_input_mat.npy");
   
-  // host copies of A, B, C
-  float *A = new float[A_size];
-  float *B = new float[B_size]; 
-  float *C = new float[C_size];
-  float *C_cpu = new float[C_size];
-
+  std::cout << "matrix_X SHAPE: " << xt::adapt(matrix_X.shape()) << std::endl;
+  std::cout << "matrix_Y SHAPE: " << xt::adapt(matrix_Y.shape()) << std::endl;
   
-  // device copies of A, B, C
-  float *d_A, *d_B, *d_C;
+  int X_rows = matrix_X.shape()[0];
+  int X_cols = matrix_X.shape()[1];
   
-  // Allocate space for device copies of A, B, C
-  cudaMalloc((void **)&d_A, A_size);
-  cudaMalloc((void **)&d_B, B_size);
-  cudaMalloc((void **)&d_C, C_size);
-
+  int Y_rows = matrix_Y.shape()[0];
+  int Y_cols = matrix_Y.shape()[1];
   
-  // initialize A and B matrices
-  auto all_ones = []() -> float {
-    return 1.0f;
-  };
-
-  srand (time(NULL));
-  auto rand_numbers = []() -> float {
-    auto f = static_cast<float>(rand())/(static_cast<float>(RAND_MAX/1000));
-    int n = static_cast<int>(f);
-    return static_cast<float>(n);
-  };
- 
-
-  initialize_matrix<float>(A, A_rows, A_cols, rand_numbers);
-  initialize_matrix<float>(B, B_rows, B_cols, rand_numbers);
+  int Z_rows = X_rows;
+  int Z_cols = Y_cols;
+  
+  int X_size = X_rows * X_cols;
+  int Y_size = Y_rows * Y_cols;
+  int Z_size = Z_rows * Z_cols;
+  
+  // host copies of X,Y,Z
+  float *X = new float[X_size];
+  float *Y = new float[Y_size]; 
+  float *Z = new float[Z_size];
+  float *Z_cpu = new float[Z_size];
+  
+  // device copies of X, Y, Z
+  float *d_X, *d_Y, *d_Z;
+  
+  // Allocate space for device copies of X, Y, Z
+  cudaMalloc((void **)&d_X, X_size);
+  cudaMalloc((void **)&d_Y, Y_size);
+  cudaMalloc((void **)&d_Z, Z_size);
   
   // Copy a & b from the host to the device
-  cudaMemcpy(d_A, &A, A_size, cudaMemcpyHostToDevice);
-  cudaMemcpy(d_B, &B, B_size, cudaMemcpyHostToDevice);
+  cudaMemcpy(d_X, &X, X_size, cudaMemcpyHostToDevice);
+  cudaMemcpy(d_Y, &Y, Y_size, cudaMemcpyHostToDevice);
   
   // Matrix Multiplication on GPU
-  dim3 dim_grid(C_cols/COL_TILE_WIDTH, C_rows/ROW_TILE_WIDTH, 1);
+  dim3 dim_grid(Z_cols/COL_TILE_WIDTH, Z_rows/ROW_TILE_WIDTH, 1);
   dim3 dim_block(COL_TILE_WIDTH, ROW_TILE_WIDTH, 1);
 
-  naive_matrix_multiply<float><<<dim_grid, dim_block>>>(A, B, C, A_cols, C_rows, C_cols);
+  naive_matrix_multiply<float><<<dim_grid, dim_block>>>(X, Y, Z, X_cols, Z_rows, Z_cols);
 
   // Wait for GPU to finish before accessing on host
   cudaDeviceSynchronize();
   
   // Copy result back to the host
-  cudaMemcpy(&C, d_C, C_size, cudaMemcpyDeviceToHost);
+  cudaMemcpy(&Z, d_Z, Z_size, cudaMemcpyDeviceToHost);
   
   // Matrix Multiplication on CPU
-  naive_matrix_multiply_cpu<float>(A, B, C_cpu, A_cols, C_rows, C_cols);
+  naive_matrix_multiply_cpu<float>(X, Y, Z_cpu, X_cols, Z_rows, Z_cols);
   
   
-  if(check_equal<float>(C, C_cpu, C_rows, C_cols))
+  if(check_equal<float>(Z, Z_cpu, Z_rows, Z_cols))
     std::cout << "PASS" << std::endl;
   else
     std::cout << "FAIL" << std::endl;
 
   // Free memory
-  cudaFree(d_A);
-  cudaFree(d_B);
-  cudaFree(d_C);
+  cudaFree(d_X);
+  cudaFree(d_Y);
+  cudaFree(d_Z);
   
   return 0; 
 }
