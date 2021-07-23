@@ -75,17 +75,22 @@ int main(void)
   int B_size = B_rows * B_cols;
   int C_size = C_rows * C_cols;
   
+  // host copies of A, B, C
   float *A = new float[A_size];
   float *B = new float[B_size]; 
   float *C = new float[C_size];
   float *C_cpu = new float[C_size];
 
-  // Allocate Unified Memory – accessible from CPU or GPU
-  cudaMallocManaged(&A, A_size*sizeof(float));
-  cudaMallocManaged(&B, B_size*sizeof(float));
-  cudaMallocManaged(&C, C_size*sizeof(float));
-  cudaMallocManaged(&C_cpu, C_size*sizeof(float));
+  
+  // device copies of A, B, C
+  float *d_A, *d_B, *d_C;
+  
+  // Allocate space for device copies of A, B, C
+  cudaMalloc((void **)&d_A, A_size);
+  cudaMalloc((void **)&d_B, B_size);
+  cudaMalloc((void **)&d_C, C_size);
 
+  
   // initialize A and B matrices
   auto all_ones = []() -> float {
     return 1.0f;
@@ -101,28 +106,36 @@ int main(void)
 
   initialize_matrix<float>(A, A_rows, A_cols, rand_numbers);
   initialize_matrix<float>(B, B_rows, B_cols, rand_numbers);
+  
+  // Copy a & b from the host to the device
+  cudaMemcpy(d_A, &A, A_size, cudaMemcpyHostToDevice);
+  cudaMemcpy(d_B, &B, B_size, cudaMemcpyHostToDevice);
+  
+  // Matrix Multiplication on GPU
+  dim3 dim_grid(C_cols/COL_TILE_WIDTH, C_rows/ROW_TILE_WIDTH, 1);
+  dim3 dim_block(COL_TILE_WIDTH, ROW_TILE_WIDTH, 1);
 
-  // dim3 dim_grid(C_cols/COL_TILE_WIDTH, C_rows/ROW_TILE_WIDTH, 1);
-  // dim3 dim_block(COL_TILE_WIDTH, ROW_TILE_WIDTH, 1);
-
-  // naive_matrix_multiply<float><<<dim_grid, dim_block>>>(A, B, C, A_cols, C_rows, C_cols);
+  naive_matrix_multiply<float><<<dim_grid, dim_block>>>(A, B, C, A_cols, C_rows, C_cols);
 
   // Wait for GPU to finish before accessing on host
-  // cudaDeviceSynchronize();
+  cudaDeviceSynchronize();
   
-  // check results
+  // Copy result back to the host
+  cudaMemcpy(&C, d_C, C_size, cudaMemcpyDeviceToHost);
+  
+  // Matrix Multiplication on CPU
   naive_matrix_multiply_cpu<float>(A, B, C_cpu, A_cols, C_rows, C_cols);
   
   
-  // if(check_equal<float>(C, C_cpu, C_rows, C_cols))
-  //   std::cout << "PASS" << std::endl;
-  // else
-  //   std::cout << "FAIL" << std::endl;
+  if(check_equal<float>(C, C_cpu, C_rows, C_cols))
+    std::cout << "PASS" << std::endl;
+  else
+    std::cout << "FAIL" << std::endl;
 
   // Free memory
-  // cudaFree(A);
-  // cudaFree(B);
-  // cudaFree(C);
+  cudaFree(d_A);
+  cudaFree(d_B);
+  cudaFree(d_C);
   
   return 0; 
 }
