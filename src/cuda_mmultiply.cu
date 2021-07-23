@@ -30,6 +30,7 @@ void naive_matrix_multiply(T *A, T *B, T* C, int width, int C_rows, int C_cols)
   int col = blockIdx.x * blockDim.x + threadIdx.x;
   // check boundry conditions
   if( row < C_rows && col < C_cols ){
+  /*
     // do the multiplication for one row and col
     T value = 0;
     for(int k = 0; k < width; k++){
@@ -37,19 +38,13 @@ void naive_matrix_multiply(T *A, T *B, T* C, int width, int C_rows, int C_cols)
     }
     // store result
     C[row * C_cols + col] = value;
+   */
+   C[row * C_cols + col] = row;
+   
     
   }
   
 
-}
-
-template<typename T>
-void initialize_matrix(T* M, int rows, int cols, std::function<float()> F) {
-  for(int i = 0; i < rows; i++){
-    for(int j = 0; j < cols; j++){
-      M[i * cols + j] = F();
-    }
-  }
 }
 
 template<typename T>
@@ -81,14 +76,6 @@ int main(void)
 {
     
   // load weights from npy files
-    
-  //xt::xarray<float> dense_weights = xt::load_npy<float>("../data/dense_weights.npy");
-  // transpose weight matrix from (784,32) -> (32,784)
-  //xt::xarray<float> matrix_X = xt::transpose(dense_weights);
-  
-  // add extra dimension (784,) -> (784,1)
-  // xt::xarray<float> matrix_Y = xt::load_npy<float>("../data/image_65.npy");
-  // matrix_Y.reshape({-1,1});
   
   xt::xarray<float> matrix_X = xt::load_npy<float>("../data/random_matrix.npy");
   xt::xarray<float> matrix_Y = xt::load_npy<float>("../data/random_input_mat.npy");
