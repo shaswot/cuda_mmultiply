@@ -19,8 +19,8 @@
 #include <xtensor/xnpy.hpp>
 #include <xtensor/xsort.hpp>
 
-#define ROW_TILE_WIDTH 32
-#define COL_TILE_WIDTH 32
+#define ROW_TILE_WIDTH 32 // block sizes
+#define COL_TILE_WIDTH 32 // block sizes
 
 template<typename T>
 __global__
@@ -30,18 +30,13 @@ void naive_matrix_multiply(T *A, T *B, T* C, int width, int C_rows, int C_cols)
   int col = blockIdx.x * blockDim.x + threadIdx.x;
   // check boundry conditions
   if( row < C_rows && col < C_cols ){
-  /*
     // do the multiplication for one row and col
     T value = 0;
     for(int k = 0; k < width; k++){
       value += A[row * width + k] * B[k * C_cols + col];
     }
     // store result
-    C[row * C_cols + col] = value;
-   */
-   C[row * C_cols + col] = row;
-   
-    
+    C[row * C_cols + col] = value;    
   }
   
 
@@ -102,29 +97,35 @@ int main(void)
   float *Z = new float[Z_size];
   float *Z_cpu = new float[Z_size];
   
-  // auto data()const: Returns a constant pointer to the underlying array serving as element storage. 
-  // The pointer is such that range [data(); data() + size()] is always a valid range, even if the container is empty (data() is not is not dereferenceable in that case)
-  
-  X = matrix_X.data();
-  Y = matrix_Y.data();
-  
-  // device copies of X, Y, Z
-  float *d_X, *d_Y, *d_Z;
-  
-  // Allocate space for device copies of X, Y, Z
-  cudaMalloc((void **)&d_X, X_size);
-  cudaMalloc((void **)&d_Y, Y_size);
-  cudaMalloc((void **)&d_Z, Z_size);
-  
-  // Copy a & b from the host to the device
-  cudaMemcpy(d_X, &X, X_size, cudaMemcpyHostToDevice);
-  cudaMemcpy(d_Y, &Y, Y_size, cudaMemcpyHostToDevice);
+  // Allocate Unified Memory – accessible from CPU or GPU
+  cudaMallocManaged(&X, X_size*sizeof(float));
+  cudaMallocManaged(&Y, Y_size*sizeof(float));
+  cudaMallocManaged(&Z, Z_size*sizeof(float));
+
+  for (int i = 0; i < X_size; i++)
+   X[i] = matrix_X[i];
+   
+  for (int i = 0; i < Y_size; i++)
+   Y[i] = matrix_Y[i];
+
   
   // Matrix Multiplication on GPU
-  //dim3 dim_grid(Z_cols/COL_TILE_WIDTH, Z_rows/ROW_TILE_WIDTH, 1);
-  //dim3 dim_block(COL_TILE_WIDTH, ROW_TILE_WIDTH, 1);
+  // Determine Grid/Block Size
+  // https://stackoverflow.com/questions/9985912/how-do-i-choose-grid-and-block-dimensions-for-cuda-kernels
   
-  dim3 dim_grid(1, 1, 1);
+  unsigned long DIM_COL_WIDTH, DIM_ROW_WIDTH;
+  unsigned long LARGEST_COL_DIM, LARGEST_ROW_DIM;
+  
+  LARGEST_COL_DIM = X_cols > Y_cols ? X_cols : Y_cols;
+  LARGEST_COL_DIM = LARGEST_COL_DIM > Z_cols ? LARGEST_COL_DIM : Z_cols;
+  
+  LARGEST_ROW_DIM = X_rows > Y_rows ? X_rows : Y_rows;
+  LARGEST_ROW_DIM = LARGEST_ROW_DIM > Z_rows ? LARGEST_ROW_DIM : Z_rows;
+  
+  DIM_COL_WIDTH = (LARGEST_COL_DIM + COL_TILE_WIDTH -1)/COL_TILE_WIDTH;
+  DIM_ROW_WIDTH = (LARGEST_ROW_DIM + ROW_TILE_WIDTH -1)/ROW_TILE_WIDTH;
+  
+  dim3 dim_grid(DIM_COL_WIDTH, DIM_ROW_WIDTH, 1);
   dim3 dim_block(COL_TILE_WIDTH, ROW_TILE_WIDTH, 1);
 
   naive_matrix_multiply<float><<<dim_grid, dim_block>>>(X, Y, Z, X_cols, Z_rows, Z_cols);
@@ -132,11 +133,9 @@ int main(void)
   // Wait for GPU to finish before accessing on host
   cudaDeviceSynchronize();
   
-  // Copy result back to the host
-  cudaMemcpy(&Z, d_Z, Z_size, cudaMemcpyDeviceToHost);
-  
+  // Convert product matrix to xtensor
   xt::xarray<double>::shape_type matrix_Z_shape = {Z_rows, Z_cols};
-  xt::xarray<float> matrix_Z = xt::adapt(Z, Z_size, xt::acquire_ownership(), matrix_Z_shape);
+  xt::xarray<float> matrix_Z = xt::adapt(Z, Z_size, matrix_Z_shape);
   std::cout<<"GPU: matrix_Z"<<std::endl;
   std::cout<<matrix_Z<<std::endl;
   std::cout<<"**********************"<<std::endl;
@@ -144,7 +143,7 @@ int main(void)
   // Matrix Multiplication on CPU
   naive_matrix_multiply_cpu<float>(X, Y, Z_cpu, X_cols, Z_rows, Z_cols);
   
-  xt::xarray<float> matrix_Z_cpu = xt::adapt(Z_cpu, Z_size, xt::acquire_ownership(), matrix_Z_shape);
+  xt::xarray<float> matrix_Z_cpu = xt::adapt(Z_cpu, Z_size, matrix_Z_shape);
   std::cout<<"CPU: matrix_Z"<<std::endl;
   std::cout<<matrix_Z_cpu<<std::endl;
   
@@ -156,9 +155,9 @@ int main(void)
     
 
   // Free memory
-  cudaFree(d_X);
-  cudaFree(d_Y);
-  cudaFree(d_Z);
+  cudaFree(X);
+  cudaFree(Y);
+  cudaFree(Z);
   
   return 0; 
 }
