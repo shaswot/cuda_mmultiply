@@ -19,21 +19,8 @@
 #include <xtensor/xnpy.hpp>
 #include <xtensor/xsort.hpp>
 
-// https://forums.developer.nvidia.com/t/any-way-to-know-on-which-sm-a-thread-is-running/19974/15
-/* E.D. Riedijk */
-
-__device__ uint get_smid(void) {
-     uint ret;
-     asm("mov.u32 %0, %smid;" : "=r"(ret) );
-     return ret;
-}
-
-/*
-__global__ void kern(int *sm){
-   if (threadIdx.x==0)
-      sm[blockIdx.x]=get_smid();
-}
-*/
+#define ROW_TILE_WIDTH 32 // block sizes
+#define COL_TILE_WIDTH 32 // block sizes
 
 template<typename T>
 __global__
@@ -51,7 +38,6 @@ void naive_matrix_multiply(T *A, T *B, T* C, int width, int C_rows, int C_cols)
     // store result
     C[row * C_cols + col] = value;    
   }
-  //sm[blockIdx.x]=get_smid();
   
 
 }
@@ -86,24 +72,11 @@ int main(void)
     
   // load weights from npy files
   
-  //xt::xarray<float> matrix_X = xt::load_npy<float>("../data/random_matrix.npy");
-  //xt::xarray<float> matrix_Y = xt::load_npy<float>("../data/random_input_mat.npy");
-  
-  xt::xarray<float> dense_weights = xt::load_npy<float>("../data/dense_weights.npy");
-  xt::xarray<float> matrix_X = xt::transpose(dense_weights);
-  
-  xt::xarray<float> matrix_Y = xt::load_npy<float>("../data/image_65.npy");
-  matrix_Y.reshape({-1, 1});
+  xt::xarray<float> matrix_X = xt::load_npy<float>("../data/random_matrix.npy");
+  xt::xarray<float> matrix_Y = xt::load_npy<float>("../data/random_input_mat.npy");
 
-  
   std::cout << "matrix_X SHAPE: " << xt::adapt(matrix_X.shape()) << std::endl;
   std::cout << "matrix_Y SHAPE: " << xt::adapt(matrix_Y.shape()) << std::endl;
-  /*
-  std::cout << matrix_X << std::endl;
-  std::cout<<"**********************"<<std::endl;
-  std::cout << matrix_Y << std::endl;
-  std::cout<<"**********************"<<std::endl;
-  */
   
   unsigned long X_rows = matrix_X.shape()[0];
   unsigned long X_cols = matrix_X.shape()[1];
@@ -128,22 +101,21 @@ int main(void)
   cudaMallocManaged(&X, X_size*sizeof(float));
   cudaMallocManaged(&Y, Y_size*sizeof(float));
   cudaMallocManaged(&Z, Z_size*sizeof(float));
-  
-  // Fill the matrix values from xtensor to C++ array
+
   for (int i = 0; i < X_size; i++)
-  X[i] = matrix_X.flat(i);
+   X[i] = matrix_X[i];
    
   for (int i = 0; i < Y_size; i++)
-  Y[i] = matrix_Y.flat(i);
-  
+   Y[i] = matrix_Y[i];
+
   
   // Matrix Multiplication on GPU
   // Determine Grid/Block Size
   // https://stackoverflow.com/questions/9985912/how-do-i-choose-grid-and-block-dimensions-for-cuda-kernels
-  unsigned long ROW_TILE_WIDTH, COL_TILE_WIDTH;
+  
   unsigned long DIM_COL_WIDTH, DIM_ROW_WIDTH;
   unsigned long LARGEST_COL_DIM, LARGEST_ROW_DIM;
-  /*
+  
   LARGEST_COL_DIM = X_cols > Y_cols ? X_cols : Y_cols;
   LARGEST_COL_DIM = LARGEST_COL_DIM > Z_cols ? LARGEST_COL_DIM : Z_cols;
   
@@ -152,20 +124,9 @@ int main(void)
   
   DIM_COL_WIDTH = (LARGEST_COL_DIM + COL_TILE_WIDTH -1)/COL_TILE_WIDTH;
   DIM_ROW_WIDTH = (LARGEST_ROW_DIM + ROW_TILE_WIDTH -1)/ROW_TILE_WIDTH;
-  */
-  
-  ROW_TILE_WIDTH = 32; 
-  COL_TILE_WIDTH = 1; 
-
-  DIM_COL_WIDTH  = 1;
-  DIM_ROW_WIDTH = 1;
   
   dim3 dim_grid(DIM_COL_WIDTH, DIM_ROW_WIDTH, 1);
   dim3 dim_block(COL_TILE_WIDTH, ROW_TILE_WIDTH, 1);
-  
-  std::cout << "GRID SIZE: " << DIM_COL_WIDTH << " , " << DIM_ROW_WIDTH << std::endl;
-  std::cout << "BLCK SIZE: " << COL_TILE_WIDTH << " , " << ROW_TILE_WIDTH << std::endl;
-
 
   naive_matrix_multiply<float><<<dim_grid, dim_block>>>(X, Y, Z, X_cols, Z_rows, Z_cols);
 
