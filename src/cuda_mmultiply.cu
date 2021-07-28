@@ -19,6 +19,11 @@
 #include <xtensor/xnpy.hpp>
 #include <xtensor/xsort.hpp>
 
+struct GPC_ID {
+    uint t_id, warp_id, sm_id, cta_id;
+};
+
+
 // https://forums.developer.nvidia.com/t/any-way-to-know-on-which-sm-a-thread-is-running/19974/15
 /* E.D. Riedijk */
 
@@ -28,12 +33,19 @@ __device__ uint get_smid(void) {
      return ret;
 }
 
-/*
-__global__ void kern(int *sm){
-   if (threadIdx.x==0)
-      sm[blockIdx.x]=get_smid();
+//https://stackoverflow.com/questions/612328/difference-between-struct-and-typedef-struct-in-c
+typedef struct GPC_ID gpc_id; 
+
+__device__ gpc_id get_gpcid(void) {
+     
+     struct GPC_ID my_id;
+     asm("mov.u32 %0, %tid;"    : "=r"(my_id.t_id)    );
+     asm("mov.u32 %0, %warpid;" : "=r"(my_id.warp_id) );
+     asm("mov.u32 %0, %smid;"   : "=r"(my_id.sm_id)   );
+     asm("mov.u32 %0, %ctaid;"  : "=r"(my_id.cta_id)  );
+     return my_id;
 }
-*/
+
 
 template<typename T>
 __global__
@@ -85,11 +97,8 @@ int main(void)
 {
     
   // load weights from npy files
-  
-  //xt::xarray<float> matrix_X = xt::load_npy<float>("../data/random_matrix.npy");
-  //xt::xarray<float> matrix_Y = xt::load_npy<float>("../data/random_input_mat.npy");
-  
-  xt::xarray<float> dense_weights = xt::load_npy<float>("../data/dense_weights.npy");
+  int LAYER_WIDTH = 512;
+  xt::xarray<float> dense_weights = xt::load_npy<float>("../data/mnist_dense-w512-20210702_dense_weights.npy");
   xt::xarray<float> matrix_X = xt::transpose(dense_weights);
   
   xt::xarray<float> matrix_Y = xt::load_npy<float>("../data/image_65.npy");
@@ -145,8 +154,10 @@ int main(void)
   // https://stackoverflow.com/questions/9985912/how-do-i-choose-grid-and-block-dimensions-for-cuda-kernels
   unsigned long ROW_TILE_WIDTH, COL_TILE_WIDTH;
   unsigned long DIM_COL_WIDTH, DIM_ROW_WIDTH;
-  unsigned long LARGEST_COL_DIM, LARGEST_ROW_DIM;
+  
   /*
+  unsigned long LARGEST_COL_DIM, LARGEST_ROW_DIM;
+  
   LARGEST_COL_DIM = X_cols > Y_cols ? X_cols : Y_cols;
   LARGEST_COL_DIM = LARGEST_COL_DIM > Z_cols ? LARGEST_COL_DIM : Z_cols;
   
@@ -157,11 +168,11 @@ int main(void)
   DIM_ROW_WIDTH = (LARGEST_ROW_DIM + ROW_TILE_WIDTH -1)/ROW_TILE_WIDTH;
   */
   
-  ROW_TILE_WIDTH = 32; 
+  ROW_TILE_WIDTH = 1; 
   COL_TILE_WIDTH = 1; 
 
   DIM_COL_WIDTH  = 1;
-  DIM_ROW_WIDTH = 1;
+  DIM_ROW_WIDTH = LAYER_WIDTH;
   
   dim3 dim_grid(DIM_COL_WIDTH, DIM_ROW_WIDTH, 1);
   dim3 dim_block(COL_TILE_WIDTH, ROW_TILE_WIDTH, 1);
@@ -197,6 +208,7 @@ int main(void)
     
 // Convert product matrix to xtensor
   xt::xarray<int> SM_ID = xt::adapt(sm, Z_size, matrix_Z_shape);
+  std::cout << "SM_ID SHAPE: " << xt::adapt(SM_ID.shape()) << std::endl;
   std::cout<<"SM ID"<<std::endl;
   std::cout<<SM_ID<<std::endl;
   std::cout<<"**********************"<<std::endl;
