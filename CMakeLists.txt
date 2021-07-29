@@ -27,6 +27,6 @@ find_package(xtensor REQUIRED)
 # add the executable
 add_executable(cuda_mmultiply
     src/cuda_mmultiply.cu
-#    include/mnist_loader.cc
-#    include/mnist_loader.h
+    include/mnist_loader.cc
+    include/mnist_loader.h
     )
