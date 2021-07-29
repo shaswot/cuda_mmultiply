@@ -64,11 +64,10 @@ void naive_matrix_multiply(T *A, T *B, T* C, int width, int C_rows, int C_cols, 
       value += A[row * width + k] * B[k * C_cols + col];
     }
     // store result
-    C[row * C_cols + col] = value;    
+    C[row * C_cols + col] = value;
+    myid[row * C_cols + col] = get_gpcid();
+    // if myid.sm_id = XX C[row * C_cols + col] = error
   }
-  myid[row * C_cols + col] = get_gpcid();
-  
-
 }
 
 template<typename T>
