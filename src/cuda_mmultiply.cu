@@ -20,36 +20,39 @@
 #include <xtensor/xsort.hpp>
 
 struct GPC_ID {
-    uint t_id, warp_id, sm_id, cta_id;
+    uint t_idx, t_idy, t_idz;
+    uint cta_idx, cta_idy, cta_idz;
+    uint warp_id, sm_id, grid_id;
 };
 
 
-// https://forums.developer.nvidia.com/t/any-way-to-know-on-which-sm-a-thread-is-running/19974/15
-/* E.D. Riedijk */
-
-__device__ uint get_smid(void) {
-     uint ret;
-     asm("mov.u32 %0, %smid;" : "=r"(ret) );
-     return ret;
-}
-
-//https://stackoverflow.com/questions/612328/difference-between-struct-and-typedef-struct-in-c
+// https://stackoverflow.com/questions/612328/difference-between-struct-and-typedef-struct-in-c
 typedef struct GPC_ID gpc_id; 
 
+// https://forums.developer.nvidia.com/t/any-way-to-know-on-which-sm-a-thread-is-running/19974/15
+// https://www.codeproject.com/Articles/15971/Using-Inline-Assembly-in-C-C
 __device__ gpc_id get_gpcid(void) {
      
      struct GPC_ID my_id;
-     asm("mov.u32 %0, %tid;"    : "=r"(my_id.t_id)    );
+     asm("mov.u32 %0, %tid.x;"    : "=r"(my_id.t_idx)    );
+     asm("mov.u32 %0, %tid.y;"    : "=r"(my_id.t_idy)    );
+     asm("mov.u32 %0, %tid.z;"    : "=r"(my_id.t_idz)    );
+
      asm("mov.u32 %0, %warpid;" : "=r"(my_id.warp_id) );
      asm("mov.u32 %0, %smid;"   : "=r"(my_id.sm_id)   );
-     asm("mov.u32 %0, %ctaid;"  : "=r"(my_id.cta_id)  );
+     asm("mov.u32 %0, %gridid;"   : "=r"(my_id.grid_id)   );
+     
+     asm("mov.u32 %0, %ctaid.x;"  : "=r"(my_id.cta_idx)  );
+     asm("mov.u32 %0, %ctaid.y;"  : "=r"(my_id.cta_idy)  );
+     asm("mov.u32 %0, %ctaid.z;"  : "=r"(my_id.cta_idz)  );
+     
      return my_id;
 }
 
 
 template<typename T>
 __global__
-void naive_matrix_multiply(T *A, T *B, T* C, int width, int C_rows, int C_cols, int* sm)
+void naive_matrix_multiply(T *A, T *B, T* C, int width, int C_rows, int C_cols, gpc_id* myid)
 {
   int row = blockIdx.y * blockDim.y + threadIdx.y;   
   int col = blockIdx.x * blockDim.x + threadIdx.x;
@@ -63,7 +66,7 @@ void naive_matrix_multiply(T *A, T *B, T* C, int width, int C_rows, int C_cols, 
     // store result
     C[row * C_cols + col] = value;    
   }
-  sm[row * C_cols + col]=get_smid();
+  myid[row * C_cols + col] = get_gpcid();
   
 
 }
@@ -97,7 +100,7 @@ int main(void)
 {
     
   // load weights from npy files
-  int LAYER_WIDTH = 512;
+  //int LAYER_WIDTH = 512;
   xt::xarray<float> dense_weights = xt::load_npy<float>("../data/mnist_dense-w512-20210702_dense_weights.npy");
   xt::xarray<float> matrix_X = xt::transpose(dense_weights);
   
@@ -132,13 +135,13 @@ int main(void)
   float *Y = new float[Y_size]; 
   float *Z = new float[Z_size];
   float *Z_cpu = new float[Z_size];
-  int *sm = new int[Z_size];
+  gpc_id *myid = new gpc_id[Z_size];
   
   // Allocate Unified Memory – accessible from CPU or GPU
   cudaMallocManaged(&X, X_size*sizeof(float));
   cudaMallocManaged(&Y, Y_size*sizeof(float));
   cudaMallocManaged(&Z, Z_size*sizeof(float));
-  cudaMallocManaged(&sm, Z_size*sizeof(int));
+  cudaMallocManaged(&myid, Z_size*sizeof(gpc_id));
 
   
   // Fill the matrix values from xtensor to C++ array
@@ -168,11 +171,11 @@ int main(void)
   DIM_ROW_WIDTH = (LARGEST_ROW_DIM + ROW_TILE_WIDTH -1)/ROW_TILE_WIDTH;
   */
   
-  ROW_TILE_WIDTH = 1; 
+  ROW_TILE_WIDTH = 8; 
   COL_TILE_WIDTH = 1; 
 
   DIM_COL_WIDTH  = 1;
-  DIM_ROW_WIDTH = LAYER_WIDTH;
+  DIM_ROW_WIDTH = 64;
   
   dim3 dim_grid(DIM_COL_WIDTH, DIM_ROW_WIDTH, 1);
   dim3 dim_block(COL_TILE_WIDTH, ROW_TILE_WIDTH, 1);
@@ -181,7 +184,7 @@ int main(void)
   std::cout << "BLCK SIZE: " << COL_TILE_WIDTH << " , " << ROW_TILE_WIDTH << std::endl;
 
 
-  naive_matrix_multiply<float><<<dim_grid, dim_block>>>(X, Y, Z, X_cols, Z_rows, Z_cols, sm);
+  naive_matrix_multiply<float><<<dim_grid, dim_block>>>(X, Y, Z, X_cols, Z_rows, Z_cols, myid);
 
   // Wait for GPU to finish before accessing on host
   cudaDeviceSynchronize();
@@ -206,18 +209,35 @@ int main(void)
   else
     std::cout << "FAIL" << std::endl;
     
-// Convert product matrix to xtensor
-  xt::xarray<int> SM_ID = xt::adapt(sm, Z_size, matrix_Z_shape);
-  std::cout << "SM_ID SHAPE: " << xt::adapt(SM_ID.shape()) << std::endl;
-  std::cout<<"SM ID"<<std::endl;
-  std::cout<<SM_ID<<std::endl;
-  std::cout<<"**********************"<<std::endl;
-    
+  // https://stackoverflow.com/questions/25918057/how-to-set-a-fixed-width-with-cout
+  size_t headerWidths[5] = {
+    std::string("T_IDX  ").size(),
+    std::string("WRP_ID  ").size(),
+    std::string("SM_ID  ").size(),
+    std::string("GRID_ID  ").size(),
+    std::string("CTA_IDX  ").size()
+    };
+
+  std::cout << "T_IDX  T_IDY  T_IDZ  WRP_ID  SM_ID  GRID_ID  CTA_IDX  CTA_IDY  CTA_IDZ"<< std::endl;
+  for (int i = 0; i < Z_size; i++){
+  std::cout << std::left << std::setw(headerWidths[0]) << myid[i].t_idx;
+  std::cout << std::left << std::setw(headerWidths[0]) << myid[i].t_idy;
+  std::cout << std::left << std::setw(headerWidths[0]) << myid[i].t_idz;
+  std::cout << std::left << std::setw(headerWidths[1]) << myid[i].warp_id;
+  std::cout << std::left << std::setw(headerWidths[2]) << myid[i].sm_id;
+  std::cout << std::left << std::setw(headerWidths[3]) << myid[i].grid_id;
+  std::cout << std::left << std::setw(headerWidths[4]) << myid[i].cta_idx;
+  std::cout << std::left << std::setw(headerWidths[4]) << myid[i].cta_idy;
+  std::cout << std::left << std::setw(headerWidths[4]) << myid[i].cta_idz;
+  std::cout << std::endl;
+  
+  }
 
   // Free memory
   cudaFree(X);
   cudaFree(Y);
   cudaFree(Z);
+  cudaFree(myid);
   
   return 0; 
 }
