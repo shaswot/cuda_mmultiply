@@ -56,6 +56,10 @@ void naive_matrix_multiply(T *A, T *B, T* C, int width, int C_rows, int C_cols, 
 {
   int row = blockIdx.y * blockDim.y + threadIdx.y;   
   int col = blockIdx.x * blockDim.x + threadIdx.x;
+  uint bad_SM = 0;
+  uint bad_thrd = 23;
+  int error = 0.0f;
+  
   // check boundry conditions
   if( row < C_rows && col < C_cols ){
     // do the multiplication for one row and col
@@ -66,7 +70,13 @@ void naive_matrix_multiply(T *A, T *B, T* C, int width, int C_rows, int C_cols, 
     // store result
     C[row * C_cols + col] = value;
     myid[row * C_cols + col] = get_gpcid();
-    // if myid.sm_id = XX C[row * C_cols + col] = error
+    
+    // Inject Error
+    /*
+    if(myid[row * C_cols + col].sm_id == bad_SM)
+        if(myid[row * C_cols + col].t_idy == bad_thrd) //cannot assume all the cores in SM are faulty.
+            C[row * C_cols + col] = error;
+    */
   }
 }
 
@@ -100,13 +110,24 @@ int main(void)
     
   // load weights from npy files
   //int LAYER_WIDTH = 512;
-  xt::xarray<float> dense_weights = xt::load_npy<float>("../data/mnist_dense-w512-20210702_dense_weights.npy");
+  xt::xarray<float> dense_weights = xt::load_npy<float>("../data/mnist_dense-w64-20210702_dense_weights.npy");
   xt::xarray<float> matrix_X = xt::transpose(dense_weights);
   
   xt::xarray<float> matrix_Y = xt::load_npy<float>("../data/image_65.npy");
   matrix_Y.reshape({-1, 1});
-
   
+  /*
+  xt::xarray<float> img_A = xt::load_npy<float>("../data/image_50365.npy");
+  xt::xarray<float> img_B = xt::load_npy<float>("../data/image_16328.npy");
+  xt::xarray<float> img_C = xt::load_npy<float>("../data/image_7673.npy");
+  xt::xarray<float> img_D = xt::load_npy<float>("../data/image_7674.npy");
+  xt::xarray<float> img_E = xt::load_npy<float>("../data/image_42789.npy");
+  xt::xarray<float> img_F = xt::load_npy<float>("../data/image_65.npy");
+  
+  xt::xarray<float> matrix_Y = xt::squeeze(xt::hstack(xtuple(img_A, img_B, img_C, img_D, img_E, img_F)));
+  */
+  
+  //std::cout << "img_A SHAPE: " << xt::adapt(img_A.shape()) << std::endl;
   std::cout << "matrix_X SHAPE: " << xt::adapt(matrix_X.shape()) << std::endl;
   std::cout << "matrix_Y SHAPE: " << xt::adapt(matrix_Y.shape()) << std::endl;
   /*
@@ -157,24 +178,11 @@ int main(void)
   unsigned long ROW_TILE_WIDTH, COL_TILE_WIDTH;
   unsigned long DIM_COL_WIDTH, DIM_ROW_WIDTH;
   
-  /*
-  unsigned long LARGEST_COL_DIM, LARGEST_ROW_DIM;
-  
-  LARGEST_COL_DIM = X_cols > Y_cols ? X_cols : Y_cols;
-  LARGEST_COL_DIM = LARGEST_COL_DIM > Z_cols ? LARGEST_COL_DIM : Z_cols;
-  
-  LARGEST_ROW_DIM = X_rows > Y_rows ? X_rows : Y_rows;
-  LARGEST_ROW_DIM = LARGEST_ROW_DIM > Z_rows ? LARGEST_ROW_DIM : Z_rows;
-  
-  DIM_COL_WIDTH = (LARGEST_COL_DIM + COL_TILE_WIDTH -1)/COL_TILE_WIDTH;
-  DIM_ROW_WIDTH = (LARGEST_ROW_DIM + ROW_TILE_WIDTH -1)/ROW_TILE_WIDTH;
-  */
-  
-  ROW_TILE_WIDTH = 8; 
+  ROW_TILE_WIDTH = 64; 
   COL_TILE_WIDTH = 1; 
 
   DIM_COL_WIDTH  = 1;
-  DIM_ROW_WIDTH = 64;
+  DIM_ROW_WIDTH = 1;
   
   dim3 dim_grid(DIM_COL_WIDTH, DIM_ROW_WIDTH, 1);
   dim3 dim_block(COL_TILE_WIDTH, ROW_TILE_WIDTH, 1);
@@ -190,7 +198,11 @@ int main(void)
   
   // Convert product matrix to xtensor
   xt::xarray<double>::shape_type matrix_Z_shape = {Z_rows, Z_cols};
-  xt::xarray<float> matrix_Z = xt::adapt(Z, Z_size, matrix_Z_shape);
+  xt::xarray<float> matrix_Z = xt::adapt(Z, Z_size,xt::no_ownership(), matrix_Z_shape);
+  
+  std::cout << "matrix_Z SHAPE: " << xt::adapt(matrix_Z.shape()) << std::endl;
+  std::cout<<"**********************"<<std::endl;
+
   std::cout<<"GPU: matrix_Z"<<std::endl;
   std::cout<<matrix_Z<<std::endl;
   std::cout<<"**********************"<<std::endl;
@@ -198,7 +210,7 @@ int main(void)
   // Matrix Multiplication on CPU
   naive_matrix_multiply_cpu<float>(X, Y, Z_cpu, X_cols, Z_rows, Z_cols);
   
-  xt::xarray<float> matrix_Z_cpu = xt::adapt(Z_cpu, Z_size, matrix_Z_shape);
+  xt::xarray<float> matrix_Z_cpu = xt::adapt(Z_cpu, Z_size,xt::no_ownership(), matrix_Z_shape);
   std::cout<<"CPU: matrix_Z"<<std::endl;
   std::cout<<matrix_Z_cpu<<std::endl;
   
