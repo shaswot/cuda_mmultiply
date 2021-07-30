@@ -23,6 +23,11 @@
 #include <xtensor/xnpy.hpp>
 #include <xtensor/xsort.hpp>
 
+// GLOBAL VARIABLES
+uint LAYER_WIDTH = 128;
+uint MODEL_SEED = 20210702;
+    
+
 // Softmax Function
 template <class _Tp>
 xt::xarray<_Tp> softmax(xt::xarray<_Tp> a)
@@ -107,8 +112,7 @@ void naive_matrix_multiply(T *A, T *B, T* C, int width, int C_rows, int C_cols, 
 
 template <class _Tp>
 xt::xarray<_Tp> matmul( xt::xarray<_Tp> matrix_X,
-                        xt::xarray<_Tp> matrix_Y,
-                        gpc_id* myid)
+                        xt::xarray<_Tp> matrix_Y)
                         // array of bad SMs
                         // array of bad threads
                         // LAYER_WIDTH
@@ -131,7 +135,7 @@ xt::xarray<_Tp> matmul( xt::xarray<_Tp> matrix_X,
   _Tp *X = new _Tp[X_size];
   _Tp *Y = new _Tp[Y_size]; 
   _Tp *Z = new _Tp[Z_size];
-  myid = new gpc_id[Z_size];
+  gpc_id *myid = new gpc_id[Z_size];
   
   // Allocate Unified Memory – accessible from CPU or GPU
   cudaMallocManaged(&X, X_size*sizeof(_Tp));
@@ -157,7 +161,10 @@ xt::xarray<_Tp> matmul( xt::xarray<_Tp> matrix_X,
   COL_TILE_WIDTH = 1; 
 
   DIM_COL_WIDTH  = 1;
-  DIM_ROW_WIDTH = 1;
+  DIM_ROW_WIDTH = 2;
+  
+  // Check if enough CUDA cores are allocated
+  assert (ROW_TILE_WIDTH*COL_TILE_WIDTH*DIM_COL_WIDTH*DIM_ROW_WIDTH >= LAYER_WIDTH && "Not enough CUDA cores allocated." );
   
   dim3 dim_grid(DIM_COL_WIDTH, DIM_ROW_WIDTH, 1);
   dim3 dim_block(COL_TILE_WIDTH, ROW_TILE_WIDTH, 1);
@@ -183,7 +190,9 @@ xt::xarray<_Tp> matmul( xt::xarray<_Tp> matrix_X,
   // Redirecting output to a file
   // https://stackoverflow.com/questions/10150468/how-to-redirect-cin-and-cout-to-files
   // https://stackoverflow.com/questions/29464578/append-std-output-of-a-function-to-a-file
-  std::ofstream out("cuda_log.txt", std::fstream::app);
+  
+  const std::string cuda_log_file = "../cuda_log-w" + std::to_string(LAYER_WIDTH) + "-" + std::to_string(MODEL_SEED) + ".txt";
+  std::ofstream out(cuda_log_file, std::fstream::app);
   std::streambuf *coutbuf = std::cout.rdbuf(); //save old buf
   std::cout.rdbuf(out.rdbuf()); //redirect std::cout to out.txt!
 
@@ -219,12 +228,20 @@ xt::xarray<_Tp> matmul( xt::xarray<_Tp> matrix_X,
 int main(int argc, char *argv[])
 {
  // load weights from npy files
-    xt::xarray<float> dense_weights = xt::load_npy<float>("../data/mnist_dense-w64-20210702_dense_weights.npy");
-    xt::xarray<float> dense_biases = xt::load_npy<float>("../data/mnist_dense-w64-20210702_dense_biases.npy");
+    
+    const std::string dense_weights_file = "../data/mnist_dense-w" + std::to_string(LAYER_WIDTH) + "-" + std::to_string(MODEL_SEED) + "_dense_weights.npy";
+    const std::string dense_biases_file = "../data/mnist_dense-w" + std::to_string(LAYER_WIDTH) + "-" + std::to_string(MODEL_SEED) + "_dense_biases.npy";
+    
+    const std::string dense_weights_1_file = "../data/mnist_dense-w" + std::to_string(LAYER_WIDTH) + "-" + std::to_string(MODEL_SEED) + "_dense_1_weights.npy";
+    const std::string dense_biases_1_file = "../data/mnist_dense-w" + std::to_string(LAYER_WIDTH) + "-" + std::to_string(MODEL_SEED) + "_dense_1_biases.npy";
+    
+ 
+    xt::xarray<float> dense_weights = xt::load_npy<float>(dense_weights_file);
+    xt::xarray<float> dense_biases = xt::load_npy<float>(dense_biases_file);
     dense_biases.reshape({-1, 1});
     
-    xt::xarray<float> dense_1_weights = xt::load_npy<float>("../data/mnist_dense-w64-20210702_dense_1_weights.npy");
-    xt::xarray<float> dense_1_biases = xt::load_npy<float>("../data/mnist_dense-w64-20210702_dense_1_biases.npy");
+    xt::xarray<float> dense_1_weights = xt::load_npy<float>(dense_weights_1_file);
+    xt::xarray<float> dense_1_biases = xt::load_npy<float>(dense_biases_1_file);
     dense_1_biases.reshape({-1, 1});
 
 
@@ -238,10 +255,7 @@ int main(int argc, char *argv[])
     /*check for the image <image_no> and display truth label*/
     // https://stackoverflow.com/questions/5029840/convert-char-to-int-in-c-and-c
     
-    gpc_id* myid_l1 = NULL;
-    gpc_id* myid_l2 = NULL;
-
-    
+   
     int image_no = std::stoi(argv[1]); //convert argument string to int
     int label = train.labels(image_no);
     std::cout << "IMAGE_NUMBER: " << image_no << std::endl;
@@ -259,11 +273,7 @@ int main(int argc, char *argv[])
     xt::xarray<float> tr_dense_weights = xt::transpose(dense_weights);
     
     // send through layer
-    xt::xarray<float> l1 = matmul<float>(tr_dense_weights, input_image, myid_l1);
-    
-    //uint myid_l1_size;
-    //myid_l1_size = tr_dense_weights.shape()[0]*input_image.shape()[1];
-    //display_core_id_values(myid_l1, myid_l1_size);
+    xt::xarray<float> l1 = matmul<float>(tr_dense_weights, input_image);
     
     // first layer bias
     xt::xarray<float> b1 = l1 + dense_biases;
@@ -276,7 +286,7 @@ int main(int argc, char *argv[])
     xt::xarray<float> tr_dense_1_weights = xt::transpose(dense_1_weights);
     
     // send through layer
-    xt::xarray<float> l2 = matmul<float>(tr_dense_1_weights, b1_relu, myid_l2);
+    xt::xarray<float> l2 = matmul<float>(tr_dense_1_weights, b1_relu);
     
     // second layer bias
     xt::xarray<float> b2 = l2 + dense_1_biases;
