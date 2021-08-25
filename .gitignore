@@ -3,4 +3,5 @@
 /data
 /dataset
 
+/cuda_logfiles
 cuda_log-w*.*
