@@ -1,4 +1,5 @@
 // https://github.com/charitha22/workspace/blob/master/cuda/mm/naive_matrix_multiply.cu
+// ./cuda_mmultiply <image_no>
 
 #include <istream>
 #include <iostream>
@@ -191,7 +192,7 @@ xt::xarray<_Tp> matmul( xt::xarray<_Tp> matrix_X,
   // https://stackoverflow.com/questions/10150468/how-to-redirect-cin-and-cout-to-files
   // https://stackoverflow.com/questions/29464578/append-std-output-of-a-function-to-a-file
   
-  const std::string cuda_log_file = "../cuda_log-w" + std::to_string(LAYER_WIDTH) + "-" + std::to_string(MODEL_SEED) + ".txt";
+  const std::string cuda_log_file = "../cuda_logfiles/cuda_log-w" + std::to_string(LAYER_WIDTH) + "-" + std::to_string(MODEL_SEED) + ".txt";
   std::ofstream out(cuda_log_file, std::fstream::app);
   std::streambuf *coutbuf = std::cout.rdbuf(); //save old buf
   std::cout.rdbuf(out.rdbuf()); //redirect std::cout to out.txt!
@@ -229,11 +230,11 @@ int main(int argc, char *argv[])
 {
  // load weights from npy files
     
-    const std::string dense_weights_file = "../data/mnist_dense-w" + std::to_string(LAYER_WIDTH) + "-" + std::to_string(MODEL_SEED) + "_dense_weights.npy";
-    const std::string dense_biases_file = "../data/mnist_dense-w" + std::to_string(LAYER_WIDTH) + "-" + std::to_string(MODEL_SEED) + "_dense_biases.npy";
+    const std::string dense_weights_file = "../data/weights/mnist_dense-w" + std::to_string(LAYER_WIDTH) + "-" + std::to_string(MODEL_SEED) + "_dense_weights.npy";
+    const std::string dense_biases_file = "../data/weights/mnist_dense-w" + std::to_string(LAYER_WIDTH) + "-" + std::to_string(MODEL_SEED) + "_dense_biases.npy";
     
-    const std::string dense_weights_1_file = "../data/mnist_dense-w" + std::to_string(LAYER_WIDTH) + "-" + std::to_string(MODEL_SEED) + "_dense_1_weights.npy";
-    const std::string dense_biases_1_file = "../data/mnist_dense-w" + std::to_string(LAYER_WIDTH) + "-" + std::to_string(MODEL_SEED) + "_dense_1_biases.npy";
+    const std::string dense_weights_1_file = "../data/weights/mnist_dense-w" + std::to_string(LAYER_WIDTH) + "-" + std::to_string(MODEL_SEED) + "_dense_1_weights.npy";
+    const std::string dense_biases_1_file = "../data/weights/mnist_dense-w" + std::to_string(LAYER_WIDTH) + "-" + std::to_string(MODEL_SEED) + "_dense_1_biases.npy";
     
  
     xt::xarray<float> dense_weights = xt::load_npy<float>(dense_weights_file);
