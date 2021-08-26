@@ -5,16 +5,19 @@
 #include <iostream>
 #include <fstream>
 #include <string>
+
 #include <stddef.h>
 #include <typeinfo>
 #include <stdexcept>
 
 // https://github.com/arpaka/mnist-loader
 #include "../include/mnist_loader.h"
+
 #include <math.h>
 #include <functional>
 #include <stdlib.h>     /* srand, rand */
 #include <time.h>       /* time */
+
 #include <xtensor/xarray.hpp>
 #include <xtensor/xio.hpp>
 #include <xtensor/xview.hpp>
@@ -111,6 +114,10 @@ void naive_matrix_multiply(T *A, T *B, T* C, int width, int C_rows, int C_cols, 
 template <class _Tp>
 xt::xarray<_Tp> matmul( xt::xarray<_Tp> matrix_X,
                         xt::xarray<_Tp> matrix_Y)
+                        // array of bad SMs
+                        // array of bad threads
+                        // LAYER_WIDTH
+                        // Automatic BLOCK SIZE
 {
   unsigned long X_rows = matrix_X.shape()[0];
   unsigned long X_cols = matrix_X.shape()[1];
@@ -228,6 +235,7 @@ int main(int argc, char *argv[])
     
     const std::string dense_weights_1_file = "../data/weights/mnist_dense-w" + std::to_string(LAYER_WIDTH) + "-" + std::to_string(MODEL_SEED) + "_dense_1_weights.npy";
     const std::string dense_biases_1_file = "../data/weights/mnist_dense-w" + std::to_string(LAYER_WIDTH) + "-" + std::to_string(MODEL_SEED) + "_dense_1_biases.npy";
+    
  
     xt::xarray<float> dense_weights = xt::load_npy<float>(dense_weights_file);
     xt::xarray<float> dense_biases = xt::load_npy<float>(dense_biases_file);
@@ -246,7 +254,9 @@ int main(int argc, char *argv[])
 
 
     /*check for the image <image_no> and display truth label*/
-    // https://stackoverflow.com/questions/5029840/convert-char-to-int-in-c-and-c   
+    // https://stackoverflow.com/questions/5029840/convert-char-to-int-in-c-and-c
+    
+   
     int image_no = std::stoi(argv[1]); //convert argument string to int
     int label = train.labels(image_no);
     std::cout << "IMAGE_NUMBER: " << image_no << std::endl;
