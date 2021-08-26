@@ -243,17 +243,33 @@ int main(int argc, char *argv[])
                      "../dataset/train-labels-idx1-ubyte", 60000);
     mnist_loader test("../dataset/t10k-images-idx3-ubyte",
                     "..//dataset/t10k-labels-idx1-ubyte", 10000);
+    
+    //combine test and train images
+    std::vector<std::vector<double>> all_images;
+    int all_labels[70000];
+    
+    for (int i = 0; i < 60000; i++)
+    {
+        all_images.push_back(train.images(i));
+        all_labels[i] = train.labels(i);
+    }
+    
+    for (int i = 0; i < 10000; i++)
+    {
+        all_images.push_back(test.images(i));
+        all_labels[60000+i] = test.labels(i);
+    }
 
 
     /*check for the image <image_no> and display truth label*/
     // https://stackoverflow.com/questions/5029840/convert-char-to-int-in-c-and-c   
     int image_no = std::stoi(argv[1]); //convert argument string to int
-    int label = train.labels(image_no);
+    int label = all_labels[image_no];
     std::cout << "IMAGE_NUMBER: " << image_no << std::endl;
     std::cout << "TRUTH_LABEL:  " << label << std::endl;
     
     // load the image <image_no> into vector and convert to xtensor<float32>
-    std::vector<double> image = train.images(image_no);
+     std::vector<double> image = all_images[image_no];
         
     // cast to float32 from double and reshape to single batch size
     xt::xarray<float> input_image = xt::adapt(image);
