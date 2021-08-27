@@ -50,12 +50,12 @@ xt::xarray<_Tp> relu(xt::xarray<_Tp> a)
 }
     
 // GPC_ID to get thread ID values
-struct GPC_ID {
+struct GPC_ID 
+{
     uint t_idx, t_idy, t_idz;
     uint cta_idx, cta_idy, cta_idz;
     uint warp_id, sm_id, grid_id;
 };
-
 
 // https://stackoverflow.com/questions/612328/difference-between-struct-and-typedef-struct-in-c
 typedef struct GPC_ID gpc_id; 
@@ -125,8 +125,10 @@ __global__ void MatMulKernel(T *out, T *in, T *a,
   
   // copy section of b into shared mem
   // https://stackoverflow.com/questions/24419822/efficiently-initializing-shared-memory-array-in-cuda/24419969#24419969
-  // use threads to write into independent locations of b[] from in [] 
+  // use threads to write into independent locations of b[] from in []
   __shared__ T b[BLOCK_WIDTH];
+  
+  // ADD in[][] into the shared memory and pad accordingly
   
   int threads_per_block = BLOCK_HEIGHT;
   int lidx = threadIdx.x;
@@ -153,7 +155,7 @@ __global__ void MatMulKernel(T *out, T *in, T *a,
       // row R of matrix a[] --> (blockIdx.y * BLOCK_HEIGHT + threadIdx.x) * matrixWidth = (blockyInd + threadIdx.x) * matrixWidth
       // col C of row R of matrix a[] --> blockIdx.x * BLOCK_WIDTH = blockxInd
       // element E of col C of row R of matrix a[] --> i
-      
+      // b[i] is accessed by all threads and therefore it is broadcast without any banking conflicts.
       cSum += b[i] * a[(blockyInd + threadIdx.x) * matrixWidth + blockxInd + i];
 //       if (i==blockElt-1)
 //       printf("blockxInd = %d, blockyInd = %d, threadIdx.x = %d, csum = %f\n", blockxInd, blockyInd, threadIdx.x, cSum);
