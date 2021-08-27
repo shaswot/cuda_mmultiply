@@ -82,31 +82,6 @@ __device__ gpc_id get_gpcid(void)
      return my_id;
 }
 
-void createRandomMatrix(float *A, int size, int seed) {
-  float *d_A;
-  float *h_A = (float *) malloc (size * sizeof(float));
-  curandGenerator_t gen;
-  size_t size_d_A = size * sizeof(float);
-
-  cudaMalloc((void **) &d_A, size_d_A);
-
-  curandCreateGenerator(&gen, CURAND_RNG_PSEUDO_DEFAULT);
-  curandSetPseudoRandomGeneratorSeed(gen, seed);
-
-  curandGenerateUniform(gen, d_A, size);
-
-  cudaMemcpy(h_A, d_A, size_d_A, cudaMemcpyDeviceToHost);
-
-  // for (int j = 0; j < 10; j++) 
-  //  printf("h_A[%d] = %l=f\n", j, 10* h_A[j]);
-
-  for (int j = 0; j < size; j++) 
-    A[j] = h_A[j] / sqrt (size); 
-
-  curandDestroyGenerator(gen);
-  cudaFree(d_A);
-  free(h_A);
-}
 
 __global__ void zero_vector_float(float *vec, const int n)
 {
@@ -117,9 +92,8 @@ __global__ void zero_vector_float(float *vec, const int n)
 
 // // Matrix-vector multiplication using CUDA
 // // Using shared memory and avoiding banking conflicts
-// xt::xarray<_Tp> matvecmul( xt::xarray<_Tp> matrix_W,
-//                         xt::xarray<_Tp> matrix_X)
-__global__ void MatMulKernel(float *out, float *in, float *a, const int matrixHeight, const int matrixWidth) {
+template<typename T>
+__global__ void MatMulKernel(T *out, T *in, T *a, const int matrixHeight, const int matrixWidth) {
   // get variables for loop
   // copy section of b into shared mem
   // go through the threads vertically and sum them into a variable
@@ -128,50 +102,63 @@ __global__ void MatMulKernel(float *out, float *in, float *a, const int matrixHe
   // looping is happening horizontally on the matrix
   // BLOCK_WIDTH is again horizontal
   // BLOCK_HEIGHT is going vertical
-  // n / BLOCK_WIDTH blocks horizontally
-  // m / BLOCK_HEIGHT block vertically
+  // n_cols / BLOCK_WIDTH blocks horizontally
+  // n_rows / BLOCK_HEIGHT block vertically
 
   // get variables for loop
   // variable for loop length: blockEltHeight
   __shared__ int blockElt;
   __shared__ int blockxInd;
   __shared__ int blockyInd;
-  if (threadIdx.x == 0) {
+  if (threadIdx.x == 0) // only the first thread of the entire block initializes the shared variables blockElt, blockxInd, blockyInd.
+  {  
     if ((blockIdx.x + 1) * BLOCK_WIDTH <= matrixWidth)
-      blockElt = BLOCK_WIDTH;
-    else blockElt = matrixWidth % BLOCK_WIDTH;
-    blockxInd = blockIdx.x * BLOCK_WIDTH;
-    blockyInd = blockIdx.y * BLOCK_HEIGHT;
+      blockElt = BLOCK_WIDTH; // NOT the rightmost block so width of block = BLOCK_WIDTH
+    else blockElt = matrixWidth % BLOCK_WIDTH; // rightmost block so width of block = matrixWidth % BLOCK_WIDTH
+    blockxInd = blockIdx.x * BLOCK_WIDTH; // top left thread x-index of the block
+    blockyInd = blockIdx.y * BLOCK_HEIGHT; // top left thread y-index of the block
   }
   
-  __syncthreads();
+  __syncthreads(); //all threads have value of blockElt, blockxInd, blockyInd
   
   // copy section of b into shared mem
-  // use the first BLOCK_WIDTH of thread
-  __shared__ float b[BLOCK_WIDTH];
-
-  if (threadIdx.x < blockElt) 
-    b[threadIdx.x] = in[blockxInd + threadIdx.x];
+  // https://stackoverflow.com/questions/24419822/efficiently-initializing-shared-memory-array-in-cuda/24419969#24419969
+  // use threads to write into independent locations of b[] from in [] 
+  __shared__ T b[BLOCK_WIDTH];
   
+  // recalculate threads_per_block
+  const int max_threads_per_block = 1024;
+  int threads_perblockm = min(matrixHeight, max_threads_per_block);
+  
+  int lidx = threadIdx.x;
+  while (lidx < BLOCK_WIDTH)
+  {
+    b[lidx] = in[lidx + blockIdx.x * BLOCK_WIDTH];
+    lidx += threads_perblockm;
+  }  
   __syncthreads();
-
+  
+   
   // summing variable
-  float cSum = (float) 0;
+  T cSum = (T) 0.0;
   int threadyInd = blockyInd + threadIdx.x;
 
   // make sure we are inside the matrix verticallly
-  if (threadyInd < matrixHeight) {
-  
+  if (threadyInd < matrixHeight) 
+  {
     // go through the threads vertically and sum them into a variable
-    for (int i=0; i<blockElt; i++)
-      // A col index   : blockIdx.x * BLOCK_WIDTH + i : blockxInd + i
-      // A row index  : blockIdx.y * BLOCK_HEIGHT + threadIdx.x : blockyInd + threadIdx.x : threadyInd
-      // B index : b[i]
-
-      // cSum = B index * ( A col index * matrixHeight + A row index)
-      cSum += b[i] * a[(blockxInd + i) * (matrixHeight) + (threadyInd)];
-      //printf("csum = %f\n", cSum);
     
+    #pragma unroll
+    for (int i=0; i<blockElt; i++)
+    {
+      // row R of matrix a[] --> blockIdx.y * BLOCK_HEIGHT + threadIdx.x) * matrixWidth 
+      // col C of row R of matrix a[] --> blockIdx.x * BLOCK_WIDTH 
+      // element E of col C of row R of matrix a[] --> i
+      
+      cSum += b[i] * a[(blockIdx.y * BLOCK_HEIGHT + threadIdx.x) * matrixWidth + blockIdx.x * BLOCK_WIDTH + i];
+//       if (i==blockElt-1)
+//       printf("blockxInd = %d, blockyInd = %d, threadIdx.x = %d, csum = %f\n", blockxInd, blockyInd, threadIdx.x, cSum);
+    }
     // atomic add these variables to the corresponding c index
     atomicAdd(out + threadyInd, cSum);
   }
@@ -217,27 +204,31 @@ xt::xarray<_Tp> matVecMul (xt::xarray<_Tp> matrix_A,
   cudaGetDeviceProperties(&dp,0);
   unsigned int max_threads_per_block = dp.maxThreadsPerBlock;
 
-  int threads_perblockm = min(n_cols, max_threads_per_block);
+  int threads_perblockm = min(n_rows, max_threads_per_block);
   dim3 threadsPerBlockm(threads_perblockm);
-  int num_blocksm = (int)ceil((float)n_cols/(float)threads_perblockm);
+  std::cout << "No. of threads per block: " << threads_perblockm <<std::endl;
+  int num_blocksm = (int)ceil((float)n_rows/(float)threads_perblockm);
   dim3 numBlocksm(num_blocksm);
 
-  int blockCols = (int) ceil(n_rows / (double) BLOCK_WIDTH);
-  int blockRows = (int) ceil(n_cols / (double) BLOCK_HEIGHT);
+  int blockCols = (int) ceil(n_cols / (double) BLOCK_WIDTH);
+  int blockRows = (int) ceil(n_rows / (double) BLOCK_HEIGHT);
   dim3 dimBlock(BLOCK_HEIGHT);
   dim3 dimGrid(blockCols, blockRows);
+  std::cout << "Gridblock size: (" << blockCols << ","<< blockRows << ")" << std::endl;
+
 
   int sharedMem = 3 * sizeof (int) + BLOCK_WIDTH * sizeof(_Tp);
+  // 3 * sizeof (int) -> to store blockElt, blockxInd, blockyInd;
 
   // execute kernels
-  zero_vector_float<<<numBlocksm, threadsPerBlockm>>>(C, n_cols);
-  MatMulKernel<<<dimGrid, dimBlock, sharedMem>>>(C, B, A, n_cols, n_rows);
+  zero_vector_float<<<numBlocksm, threadsPerBlockm>>>(C, n_rows);
+  MatMulKernel<<<dimGrid, dimBlock, sharedMem>>>(C, B, A, n_rows, n_cols);
 
   cudaDeviceSynchronize();
    
   // Convert product vector to xtensor
   xt::xarray<double>::shape_type C_shape = {size_C, 1};
-  xt::xarray<float> vec_C = xt::adapt(C, size_C, xt::no_ownership(), C_shape);
+  xt::xarray<_Tp> vec_C = xt::adapt(C, size_C, xt::no_ownership(), C_shape);
 
   cudaFree(A);
   cudaFree(B);
@@ -248,25 +239,8 @@ xt::xarray<_Tp> matVecMul (xt::xarray<_Tp> matrix_A,
 
 
 int main(int argc, char *argv[])
-// int main()
+
 {
-//     int m = 512;
-//     int n = 1024;
-  
-//     // declare matrices for CPU and allocate memory
-//     float *A = (float *) malloc (m * n * sizeof(float));
-//     float *B = (float *) malloc (n * sizeof(float));
-//     float *C = (float *) malloc (m * sizeof(float));
-    
-//     // randomly fill in elements of CPU matrices
-//     createRandomMatrix(A, m * n, time(NULL));
-//     createRandomMatrix(B, n, time(NULL));
-    
-//     matVecMul (C, B, A, m, n);
-    
-//     free(A);
-//     free(B);
-//     free(C); 
   
     // load weights from npy files
     
@@ -329,35 +303,36 @@ int main(int argc, char *argv[])
   // send through layer
   xt::xarray<float> l1 = matVecMul(tr_dense_weights, input_image);
   
-  std::cout << "Weight Matrix" << std::endl << tr_dense_weights << std::endl;
-  std::cout << "***************************************" << std::endl;
-  std::cout << "Input Vector" << std::endl << input_image << std::endl;
-  std::cout << "***************************************" << std::endl;
-  std::cout << "Output Vector" << std::endl << l1 << std::endl;
-  std::cout << "***************************************" << std::endl;
+//   std::cout << "Transposed Weight Matrix" << std::endl << tr_dense_weights << std::endl;
+//   std::cout << "Transposed Weight Matrix Shape"<<xt::adapt(tr_dense_weights.shape())<< std::endl;
+//   std::cout << "***************************************" << std::endl;
+//   std::cout << "Input Vector" << std::endl << input_image << std::endl;
+//   std::cout << "***************************************" << std::endl;
+//   std::cout << "Output Vector" << std::endl << l1 << std::endl;
+//   std::cout << "***************************************" << std::endl;
 
 
-//   // first layer bias
-//   xt::xarray<float> b1 = l1 + dense_biases;
+  // first layer bias
+  xt::xarray<float> b1 = l1 + dense_biases;
     
-//   // relu activation
-//   xt::xarray<float> b1_relu = relu<float>(b1);
+  // relu activation
+  xt::xarray<float> b1_relu = relu<float>(b1);
 
-//   /******************LAYER 2******************/
-//   // transpose weight matrix
-//   xt::xarray<float> tr_dense_1_weights = xt::transpose(dense_1_weights);
+  /******************LAYER 2******************/
+  // transpose weight matrix
+  xt::xarray<float> tr_dense_1_weights = xt::transpose(dense_1_weights);
     
-//   // send through layer
-//   xt::xarray<float> l2 = matVecMul<float>(tr_dense_1_weights, b1_relu);
+  // send through layer
+  xt::xarray<float> l2 = matVecMul<float>(tr_dense_1_weights, b1_relu);
     
-//   // second layer bias
-//   xt::xarray<float> b2 = l2 + dense_1_biases;
+  // second layer bias
+  xt::xarray<float> b2 = l2 + dense_1_biases;
     
-//   // softmax activation
-//   xt::xarray<float> l3 = softmax(b2);
+  // softmax activation
+  xt::xarray<float> l3 = softmax(b2);
     
-//   // argmax
-//   std::cout << "PREDICTION:   " << xt::argmax(l3, 0)[0] << std::endl;
+  // argmax
+  std::cout << "PREDICTION:   " << xt::argmax(l3, 0)[0] << std::endl;
     
   return 0; 
     
