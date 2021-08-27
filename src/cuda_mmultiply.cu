@@ -77,6 +77,31 @@ __device__ gpc_id get_gpcid(void) {
 }
 
 
+// Matrix-vector multiplication using CUDA
+// Using shared memory and avoiding banking conflicts
+xt::xarray<_Tp> matmul( xt::xarray<_Tp> matrix_W,
+                        xt::xarray<_Tp> matrix_X)
+{
+    unsigned long X_rows = matrix_X.shape()[0];
+    unsigned long X_cols = matrix_X.shape()[1];
+  
+    unsigned long Y_rows = matrix_Y.shape()[0];
+    unsigned long Y_cols = matrix_Y.shape()[1];
+  
+    unsigned long Z_rows = X_rows;
+    unsigned long Z_cols = Y_cols;
+  
+    unsigned long X_size = X_rows * X_cols;
+    unsigned long Y_size = Y_rows * Y_cols;
+    unsigned long Z_size = Z_rows * Z_cols;
+  
+    // host copies of X,Y,Z
+    _Tp *X = new _Tp[X_size];
+    _Tp *Y = new _Tp[Y_size]; 
+    _Tp *Z = new _Tp[Z_size];
+    gpc_id *myid = new gpc_id[Z_size];
+}
+
 // Matrix Multiplication using CUDA
 template<typename T>
 __global__
