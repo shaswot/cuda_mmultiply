@@ -49,7 +49,6 @@ xt::xarray<_Tp> relu(xt::xarray<_Tp> a)
     return (xt::abs(a)+a)/2;
 }
     
-    
 // GPC_ID to get thread ID values
 struct GPC_ID {
     uint t_idx, t_idy, t_idz;
@@ -65,7 +64,6 @@ typedef struct GPC_ID gpc_id;
 // https://www.codeproject.com/Articles/15971/Using-Inline-Assembly-in-C-C
 __device__ gpc_id get_gpcid(void) 
 {
-     
      struct GPC_ID my_id;
      asm("mov.u32 %0, %tid.x;"    : "=r"(my_id.t_idx)    );
      asm("mov.u32 %0, %tid.y;"    : "=r"(my_id.t_idy)    );
@@ -93,7 +91,11 @@ __global__ void zero_vector(T *vec, const int n)
 // // Matrix-vector multiplication using CUDA
 // // Using shared memory and avoiding banking conflicts
 template<typename T>
-__global__ void MatMulKernel(T *out, T *in, T *a, const int matrixHeight, const int matrixWidth) {
+__global__ void MatMulKernel(T *out, T *in, T *a, 
+                             const int matrixHeight, 
+                             const int matrixWidth,
+                             gpc_id* myid) 
+{
   // get variables for loop
   // copy section of b into shared mem
   // go through the threads vertically and sum them into a variable
@@ -158,6 +160,7 @@ __global__ void MatMulKernel(T *out, T *in, T *a, const int matrixHeight, const 
     }
     // atomic add these variables to the corresponding c index
     atomicAdd(out + threadyInd, cSum);
+    myid[threadyInd] = get_gpcid();
   }
   
 }
@@ -181,11 +184,13 @@ xt::xarray<_Tp> matVecMul (xt::xarray<_Tp> matrix_A,
   _Tp *A = new _Tp[size_A];
   _Tp *B = new _Tp[size_B]; 
   _Tp *C = new _Tp[size_C];
+  gpc_id *myid = new gpc_id[size_C];
   
   // Allocate Unified Memory – accessible from CPU or GPU
   cudaMallocManaged(&A, size_A*sizeof(_Tp));
   cudaMallocManaged(&B, size_B*sizeof(_Tp));
   cudaMallocManaged(&C, size_C*sizeof(_Tp));
+  cudaMallocManaged(&myid, size_C*sizeof(gpc_id));
   
   // Fill the matrix values from xtensor to C++ array
   for (int i = 0; i < size_A; i++)
@@ -222,13 +227,47 @@ xt::xarray<_Tp> matVecMul (xt::xarray<_Tp> matrix_A,
   // execute kernels
 //   zero_vector<float><<<numBlocksm, threadsPerBlockm>>>(C, n_rows);
   cudaMemset(C, 0, n_rows*sizeof(_Tp));
-  MatMulKernel<float><<<dimGrid, dimBlock, sharedMem>>>(C, B, A, n_rows, n_cols);
+  MatMulKernel<float><<<dimGrid, dimBlock, sharedMem>>>(C, B, A, n_rows, n_cols, myid);
 
   cudaDeviceSynchronize();
    
   // Convert product vector to xtensor
   xt::xarray<double>::shape_type C_shape = {size_C, 1};
   xt::xarray<_Tp> vec_C = xt::adapt(C, size_C, xt::no_ownership(), C_shape);
+  
+  // Log the output of myid
+  // https://stackoverflow.com/questions/25918057/how-to-set-a-fixed-width-with-cout
+  size_t headerWidths[5] = {std::string("T_IDX  ").size(),
+                            std::string("WRP_ID  ").size(),
+                            std::string("SM_ID  ").size(),
+                            std::string("GRID_ID  ").size(),
+                            std::string("CTA_IDX  ").size()
+                            };
+  // Redirecting output to a file
+  // https://stackoverflow.com/questions/10150468/how-to-redirect-cin-and-cout-to-files
+  // https://stackoverflow.com/questions/29464578/append-std-output-of-a-function-to-a-file
+  
+  const std::string cuda_log_file = "../cuda_logfiles/cuda_log-w" + std::to_string(LAYER_WIDTH) + "-" + std::to_string(MODEL_SEED) + ".txt";
+  std::ofstream out(cuda_log_file, std::fstream::app);
+  std::streambuf *coutbuf = std::cout.rdbuf(); //save old buf
+  std::cout.rdbuf(out.rdbuf()); //redirect std::cout to out.txt!
+
+  std::cout << "T_IDX  T_IDY  T_IDZ  WRP_ID  SM_ID  GRID_ID  CTA_IDX  CTA_IDY  CTA_IDZ"<< std::endl;
+  for (int i = 0; i < size_C; i++){
+      std::cout << std::left << std::setw(headerWidths[0]) << myid[i].t_idx;
+      std::cout << std::left << std::setw(headerWidths[0]) << myid[i].t_idy;
+      std::cout << std::left << std::setw(headerWidths[0]) << myid[i].t_idz;
+      std::cout << std::left << std::setw(headerWidths[1]) << myid[i].warp_id;
+      std::cout << std::left << std::setw(headerWidths[2]) << myid[i].sm_id;
+      std::cout << std::left << std::setw(headerWidths[3]) << myid[i].grid_id;
+      std::cout << std::left << std::setw(headerWidths[4]) << myid[i].cta_idx;
+      std::cout << std::left << std::setw(headerWidths[4]) << myid[i].cta_idy;
+      std::cout << std::left << std::setw(headerWidths[4]) << myid[i].cta_idz;
+      std::cout << std::endl;
+  }
+  std::cout << "***************************" << std::endl;
+  
+  std::cout.rdbuf(coutbuf); //reset to standard output again
 
   cudaFree(A);
   cudaFree(B);
