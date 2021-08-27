@@ -24,10 +24,10 @@
 #include <curand.h>
 
 #define BLOCK_HEIGHT 16
-#define BLOCK_WIDTH 196
+#define BLOCK_WIDTH 98
 
 // GLOBAL VARIABLES
-uint LAYER_WIDTH = 32;
+uint LAYER_WIDTH = 128;
 uint MODEL_SEED = 20210702;
     
 
@@ -143,16 +143,16 @@ __global__ void MatMulKernel(T *out, T *in, T *a, const int matrixHeight, const 
   // make sure we are inside the matrix verticallly
   if (threadyInd < matrixHeight) 
   {
-    // go through the threads vertically and sum them into a variable
+    // each thread computes one element of a block segment of the output vector
     
     #pragma unroll
     for (int i=0; i<blockElt; i++)
     {
-      // row R of matrix a[] --> blockIdx.y * BLOCK_HEIGHT + threadIdx.x) * matrixWidth 
-      // col C of row R of matrix a[] --> blockIdx.x * BLOCK_WIDTH 
+      // row R of matrix a[] --> (blockIdx.y * BLOCK_HEIGHT + threadIdx.x) * matrixWidth = (blockyInd + threadIdx.x) * matrixWidth
+      // col C of row R of matrix a[] --> blockIdx.x * BLOCK_WIDTH = blockxInd
       // element E of col C of row R of matrix a[] --> i
       
-      cSum += b[i] * a[(blockIdx.y * BLOCK_HEIGHT + threadIdx.x) * matrixWidth + blockIdx.x * BLOCK_WIDTH + i];
+      cSum += b[i] * a[(blockyInd + threadIdx.x) * matrixWidth + blockxInd + i];
 //       if (i==blockElt-1)
 //       printf("blockxInd = %d, blockyInd = %d, threadIdx.x = %d, csum = %f\n", blockxInd, blockyInd, threadIdx.x, cSum);
     }
@@ -203,11 +203,11 @@ xt::xarray<_Tp> matVecMul (xt::xarray<_Tp> matrix_A,
   
   assert(BLOCK_HEIGHT <= max_threads_per_block && "BLOCK_HEIGHT exceeds max_threads_per_block");
   
-  // Block Grid for zero_vector_float<<< >>>
-  int threads_perblockm = min(n_rows, max_threads_per_block);
-  dim3 threadsPerBlockm(threads_perblockm);
-  int num_blocksm = (int)ceil((float)n_rows/(float)threads_perblockm);
-  dim3 numBlocksm(num_blocksm);
+//   // Block Grid for zero_vector_float<<< >>>
+//   int threads_perblockm = min(n_rows, max_threads_per_block);
+//   dim3 threadsPerBlockm(threads_perblockm);
+//   int num_blocksm = (int)ceil((float)n_rows/(float)threads_perblockm);
+//   dim3 numBlocksm(num_blocksm);
 
   // Block Grid for MatMulKernel<<< >>>
   int blockCols = (int) ceil(n_cols / (double) BLOCK_WIDTH);
