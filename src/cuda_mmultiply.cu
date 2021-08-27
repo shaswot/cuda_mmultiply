@@ -23,11 +23,11 @@
 
 #include <curand.h>
 
-#define BLOCK_HEIGHT 1024
-#define BLOCK_WIDTH 64
+#define BLOCK_HEIGHT 32
+#define BLOCK_WIDTH 392
 
 // GLOBAL VARIABLES
-uint LAYER_WIDTH = 128;
+uint LAYER_WIDTH = 32;
 uint MODEL_SEED = 20210702;
     
 
@@ -178,23 +178,38 @@ __global__ void MatMulKernel(float *out, float *in, float *a, const int matrixHe
   
 }
 
-float matVecMul (float * C, float * B, float * A, const int m, const int n)
-{  
+template <class _Tp>
+xt::xarray<_Tp> matVecMul (xt::xarray<_Tp> matrix_A, 
+                           xt::xarray<_Tp> vector_B)
+{
+  unsigned int n_rows = matrix_A.shape()[0];
+  unsigned int n_cols = matrix_A.shape()[1];
   
-  int size_A = n * m * sizeof(float);
-  int size_B = n * sizeof(float);
-  int size_C = m * sizeof(float);
+  unsigned int size_A = n_rows * n_cols;
+  unsigned int size_B = n_cols;
+  assert (vector_B.shape()[0] == size_B && "matrix A and vector B shape mismatch.");
+  assert (vector_B.shape()[1] == 1 && "vector B no. of columns != 1");
+  unsigned int size_C = n_rows;
   
   // declare matrices for GPU and allocate memory
-  float *d_A, *d_B, *d_C;
   
-  cudaMalloc((void**) &d_A, size_A);
-  cudaMalloc((void**) &d_B, size_B);
-  cudaMalloc((void**) &d_C, size_C);
-
-  // copy elements from CPU to GPU
-  cudaMemcpy(d_A, A, size_A, cudaMemcpyHostToDevice);
-  cudaMemcpy(d_B, B, size_B, cudaMemcpyHostToDevice);
+  // host copies of A,B,C
+  _Tp *A = new _Tp[size_A];
+  _Tp *B = new _Tp[size_B]; 
+  _Tp *C = new _Tp[size_C];
+  
+  // Allocate Unified Memory – accessible from CPU or GPU
+  cudaMallocManaged(&A, size_A*sizeof(_Tp));
+  cudaMallocManaged(&B, size_B*sizeof(_Tp));
+  cudaMallocManaged(&C, size_C*sizeof(_Tp));
+  
+  // Fill the matrix values from xtensor to C++ array
+  for (int i = 0; i < size_A; i++)
+  A[i] = matrix_A.flat(i);
+   
+  for (int i = 0; i < size_B; i++)
+  B[i] = vector_B.flat(i);
+  
 
   //run mat-vec multiplication
   // set up threading and blocking variables
@@ -202,58 +217,149 @@ float matVecMul (float * C, float * B, float * A, const int m, const int n)
   cudaGetDeviceProperties(&dp,0);
   unsigned int max_threads_per_block = dp.maxThreadsPerBlock;
 
-  int threads_perblockm = min(m, max_threads_per_block);
+  int threads_perblockm = min(n_cols, max_threads_per_block);
   dim3 threadsPerBlockm(threads_perblockm);
-  int num_blocksm = (int)ceil((float)m/(float)threads_perblockm);
+  int num_blocksm = (int)ceil((float)n_cols/(float)threads_perblockm);
   dim3 numBlocksm(num_blocksm);
 
-  int blockCols = (int) ceil(n / (double) BLOCK_WIDTH);
-  int blockRows = (int) ceil(m / (double) BLOCK_HEIGHT);
+  int blockCols = (int) ceil(n_rows / (double) BLOCK_WIDTH);
+  int blockRows = (int) ceil(n_cols / (double) BLOCK_HEIGHT);
   dim3 dimBlock(BLOCK_HEIGHT);
   dim3 dimGrid(blockCols, blockRows);
 
-  int sharedMem = 3 * sizeof (int) + BLOCK_WIDTH * sizeof (float);
+  int sharedMem = 3 * sizeof (int) + BLOCK_WIDTH * sizeof(_Tp);
 
   // execute kernels
-  zero_vector_float<<<numBlocksm, threadsPerBlockm>>>(d_C, m);
-  MatMulKernel<<<dimGrid, dimBlock, sharedMem>>>(d_C, d_B, d_A, m, n);
+  zero_vector_float<<<numBlocksm, threadsPerBlockm>>>(C, n_cols);
+  MatMulKernel<<<dimGrid, dimBlock, sharedMem>>>(C, B, A, n_cols, n_rows);
 
   cudaDeviceSynchronize();
-  
-  // copy results back to CPU
-  cudaMemcpy(C, d_C, size_C, cudaMemcpyDeviceToHost);
+   
+  // Convert product vector to xtensor
+  xt::xarray<double>::shape_type C_shape = {size_C, 1};
+  xt::xarray<float> vec_C = xt::adapt(C, size_C, xt::no_ownership(), C_shape);
 
-  cudaFree(d_A);
-  cudaFree(d_B);
-  cudaFree(d_C);
+  cudaFree(A);
+  cudaFree(B);
+  cudaFree(C);
   
-  return 0;
+  return vec_C;
 }
 
 
-// int main(int argc, char *argv[])
-int main()
+int main(int argc, char *argv[])
+// int main()
 {
-    int m = 512;
-    int n = 1024;
+//     int m = 512;
+//     int n = 1024;
   
-    // declare matrices for CPU and allocate memory
-    float *A = (float *) malloc (m * n * sizeof(float));
-    float *B = (float *) malloc (n * sizeof(float));
-    float *C = (float *) malloc (m * sizeof(float));
+//     // declare matrices for CPU and allocate memory
+//     float *A = (float *) malloc (m * n * sizeof(float));
+//     float *B = (float *) malloc (n * sizeof(float));
+//     float *C = (float *) malloc (m * sizeof(float));
     
-    // randomly fill in elements of CPU matrices
-    createRandomMatrix(A, m * n, time(NULL));
-    createRandomMatrix(B, n, time(NULL));
+//     // randomly fill in elements of CPU matrices
+//     createRandomMatrix(A, m * n, time(NULL));
+//     createRandomMatrix(B, n, time(NULL));
     
-    matVecMul (C, B, A, m, n);
+//     matVecMul (C, B, A, m, n);
     
-    free(A);
-    free(B);
-    free(C); 
+//     free(A);
+//     free(B);
+//     free(C); 
   
-    return 0;
+    // load weights from npy files
     
+  const std::string dense_weights_file = "../data/weights/mnist_dense-w" + std::to_string(LAYER_WIDTH) + "-" + std::to_string(MODEL_SEED) + "_dense_weights.npy";
+  const std::string dense_biases_file = "../data/weights/mnist_dense-w" + std::to_string(LAYER_WIDTH) + "-" + std::to_string(MODEL_SEED) + "_dense_biases.npy";
+  
+  const std::string dense_weights_1_file = "../data/weights/mnist_dense-w" + std::to_string(LAYER_WIDTH) + "-" + std::to_string(MODEL_SEED) + "_dense_1_weights.npy";
+  const std::string dense_biases_1_file = "../data/weights/mnist_dense-w" + std::to_string(LAYER_WIDTH) + "-" + std::to_string(MODEL_SEED) + "_dense_1_biases.npy";
+ 
+  xt::xarray<float> dense_weights = xt::load_npy<float>(dense_weights_file);
+  xt::xarray<float> dense_biases = xt::load_npy<float>(dense_biases_file);
+  dense_biases.reshape({-1, 1});
+    
+  xt::xarray<float> dense_1_weights = xt::load_npy<float>(dense_weights_1_file);
+  xt::xarray<float> dense_1_biases = xt::load_npy<float>(dense_biases_1_file);
+  dense_1_biases.reshape({-1, 1});
+
+
+  // load mnist data
+  mnist_loader train("../dataset/train-images-idx3-ubyte",
+                     "../dataset/train-labels-idx1-ubyte", 60000);
+  mnist_loader test("../dataset/t10k-images-idx3-ubyte",
+                    "..//dataset/t10k-labels-idx1-ubyte", 10000);
+    
+  //combine test and train images
+  std::vector<std::vector<double>> all_images;
+  int all_labels[70000];
+    
+  for (int i = 0; i < 60000; i++)
+  {
+      all_images.push_back(train.images(i));
+      all_labels[i] = train.labels(i);
+  }
+    
+  for (int i = 0; i < 10000; i++)
+  {
+      all_images.push_back(test.images(i));
+      all_labels[60000+i] = test.labels(i);
+  }
+
+
+  /*check for the image <image_no> and display truth label*/
+  // https://stackoverflow.com/questions/5029840/convert-char-to-int-in-c-and-c   
+  int image_no = std::stoi(argv[1]); //convert argument string to int
+  int label = all_labels[image_no];
+  std::cout << "IMAGE_NUMBER: " << image_no << std::endl;
+  std::cout << "TRUTH_LABEL:  " << label << std::endl;
+    
+  // load the image <image_no> into vector and convert to xtensor<float32>
+  std::vector<double> image = all_images[image_no];
+        
+  // cast to float32 from double and reshape to single batch size
+  xt::xarray<float> input_image = xt::adapt(image);
+  input_image.reshape({-1, 1});
+  
+  /******************LAYER 1******************/
+  // transpose weight matrix from (784, LAYER_WIDTH) -> (LAYER_WIDTH,784)
+  xt::xarray<float> tr_dense_weights = xt::transpose(dense_weights);
+    
+  // send through layer
+  xt::xarray<float> l1 = matVecMul(tr_dense_weights, input_image);
+  
+  std::cout << "Weight Matrix" << std::endl << tr_dense_weights << std::endl;
+  std::cout << "***************************************" << std::endl;
+  std::cout << "Input Vector" << std::endl << input_image << std::endl;
+  std::cout << "***************************************" << std::endl;
+  std::cout << "Output Vector" << std::endl << l1 << std::endl;
+  std::cout << "***************************************" << std::endl;
+
+
+//   // first layer bias
+//   xt::xarray<float> b1 = l1 + dense_biases;
+    
+//   // relu activation
+//   xt::xarray<float> b1_relu = relu<float>(b1);
+
+//   /******************LAYER 2******************/
+//   // transpose weight matrix
+//   xt::xarray<float> tr_dense_1_weights = xt::transpose(dense_1_weights);
+    
+//   // send through layer
+//   xt::xarray<float> l2 = matVecMul<float>(tr_dense_1_weights, b1_relu);
+    
+//   // second layer bias
+//   xt::xarray<float> b2 = l2 + dense_1_biases;
+    
+//   // softmax activation
+//   xt::xarray<float> l3 = softmax(b2);
+    
+//   // argmax
+//   std::cout << "PREDICTION:   " << xt::argmax(l3, 0)[0] << std::endl;
+    
+  return 0; 
     
     
     /*********************************************************************************/
