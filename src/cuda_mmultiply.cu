@@ -220,7 +220,8 @@ xt::xarray<_Tp> matVecMul (xt::xarray<_Tp> matrix_A,
   // 3 * sizeof (int) -> to store blockElt, blockxInd, blockyInd;
 
   // execute kernels
-  zero_vector<float><<<numBlocksm, threadsPerBlockm>>>(C, n_rows);
+//   zero_vector<float><<<numBlocksm, threadsPerBlockm>>>(C, n_rows);
+  cudaMemset(C, 0, n_rows*sizeof(_Tp));
   MatMulKernel<float><<<dimGrid, dimBlock, sharedMem>>>(C, B, A, n_rows, n_cols);
 
   cudaDeviceSynchronize();
