@@ -21,12 +21,11 @@ set(CMAKE_CXX_COMPILER nvc++)
 find_package(xtl REQUIRED)
 find_package(xtensor REQUIRED)
 
-
-
-
 # add the executable
 add_executable(cuda_mmultiply
     src/cuda_mmultiply.cu
     include/mnist_loader.cc
     include/mnist_loader.h
     )
+    
+target_link_libraries(cuda_mmultiply -lcurand)
