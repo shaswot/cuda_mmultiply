@@ -127,6 +127,7 @@ __global__ void MatMulKernel(T *out, T *in, T *a,
   // https://stackoverflow.com/questions/24419822/efficiently-initializing-shared-memory-array-in-cuda/24419969#24419969
   // use threads to write into independent locations of b[] from in []
   __shared__ T b[BLOCK_WIDTH];
+  __shared__ T in_sub[BLOCK_HEIGHT][BLOCK_WIDTH + 31];
   
   // ADD in[][] into the shared memory and pad accordingly
   
@@ -137,6 +138,12 @@ __global__ void MatMulKernel(T *out, T *in, T *a,
     b[lidx] = in[lidx + blockIdx.x * BLOCK_WIDTH];
     lidx += threads_per_block;
   }  
+  __syncthreads();
+  
+  for (int i=0; i<blockElt; i++) //each thread loads one sub-row of matrix a[].
+  {
+    in_sub[threadIdx.x][i] = a[(blockyInd + threadIdx.x) * matrixWidth + blockxInd + i];
+  }
   __syncthreads();
   
    
@@ -156,7 +163,9 @@ __global__ void MatMulKernel(T *out, T *in, T *a,
       // col C of row R of matrix a[] --> blockIdx.x * BLOCK_WIDTH = blockxInd
       // element E of col C of row R of matrix a[] --> i
       // b[i] is accessed by all threads and therefore it is broadcast without any banking conflicts.
-      cSum += b[i] * a[(blockyInd + threadIdx.x) * matrixWidth + blockxInd + i];
+//       cSum += b[i] * a[(blockyInd + threadIdx.x) * matrixWidth + blockxInd + i]; //working version
+      cSum += in_sub[threadIdx.x][i] * b[i];
+
 //       if (i==blockElt-1)
 //       printf("blockxInd = %d, blockyInd = %d, threadIdx.x = %d, csum = %f\n", blockxInd, blockyInd, threadIdx.x, cSum);
     }
@@ -223,7 +232,8 @@ xt::xarray<_Tp> matVecMul (xt::xarray<_Tp> matrix_A,
   dim3 dimGrid(blockCols, blockRows);
   std::cout << "Gridblock size: (" << blockCols << ","<< blockRows << ")" << std::endl;
 
-  int sharedMem = 3 * sizeof (int) + BLOCK_WIDTH * sizeof(_Tp);
+  int sharedMem = 3 * sizeof (int) + BLOCK_WIDTH * sizeof(_Tp) + BLOCK_HEIGHT*(BLOCK_WIDTH + 31) * sizeof(_Tp);
+  // 31 is for padding s.t. (96+31) mod 32 = 1
   // 3 * sizeof (int) -> to store blockElt, blockxInd, blockyInd;
 
   // execute kernels
