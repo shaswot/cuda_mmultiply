@@ -23,8 +23,8 @@
 
 #include <curand.h>
 
-#define BLOCK_HEIGHT 32
-#define BLOCK_WIDTH 392
+#define BLOCK_HEIGHT 16
+#define BLOCK_WIDTH 196
 
 // GLOBAL VARIABLES
 uint LAYER_WIDTH = 32;
@@ -82,8 +82,8 @@ __device__ gpc_id get_gpcid(void)
      return my_id;
 }
 
-
-__global__ void zero_vector_float(float *vec, const int n)
+template<typename T>
+__global__ void zero_vector(T *vec, const int n)
 {
   unsigned int xIndex = blockDim.x * blockIdx.x + threadIdx.x;
   if ( xIndex < n )
@@ -126,15 +126,12 @@ __global__ void MatMulKernel(T *out, T *in, T *a, const int matrixHeight, const 
   // use threads to write into independent locations of b[] from in [] 
   __shared__ T b[BLOCK_WIDTH];
   
-  // recalculate threads_per_block
-  const int max_threads_per_block = 1024;
-  int threads_perblockm = min(matrixHeight, max_threads_per_block);
-  
+  int threads_per_block = BLOCK_HEIGHT;
   int lidx = threadIdx.x;
   while (lidx < BLOCK_WIDTH)
   {
     b[lidx] = in[lidx + blockIdx.x * BLOCK_WIDTH];
-    lidx += threads_perblockm;
+    lidx += threads_per_block;
   }  
   __syncthreads();
   
@@ -203,26 +200,28 @@ xt::xarray<_Tp> matVecMul (xt::xarray<_Tp> matrix_A,
   cudaDeviceProp dp;
   cudaGetDeviceProperties(&dp,0);
   unsigned int max_threads_per_block = dp.maxThreadsPerBlock;
-
+  
+  assert(BLOCK_HEIGHT <= max_threads_per_block && "BLOCK_HEIGHT exceeds max_threads_per_block");
+  
+  // Block Grid for zero_vector_float<<< >>>
   int threads_perblockm = min(n_rows, max_threads_per_block);
   dim3 threadsPerBlockm(threads_perblockm);
-  std::cout << "No. of threads per block: " << threads_perblockm <<std::endl;
   int num_blocksm = (int)ceil((float)n_rows/(float)threads_perblockm);
   dim3 numBlocksm(num_blocksm);
 
+  // Block Grid for MatMulKernel<<< >>>
   int blockCols = (int) ceil(n_cols / (double) BLOCK_WIDTH);
   int blockRows = (int) ceil(n_rows / (double) BLOCK_HEIGHT);
-  dim3 dimBlock(BLOCK_HEIGHT);
+  dim3 dimBlock(BLOCK_HEIGHT); // BLOCK_HEIGHT directly corresponds to no. of threads per block i.e., one thread per row of the block.
   dim3 dimGrid(blockCols, blockRows);
   std::cout << "Gridblock size: (" << blockCols << ","<< blockRows << ")" << std::endl;
-
 
   int sharedMem = 3 * sizeof (int) + BLOCK_WIDTH * sizeof(_Tp);
   // 3 * sizeof (int) -> to store blockElt, blockxInd, blockyInd;
 
   // execute kernels
-  zero_vector_float<<<numBlocksm, threadsPerBlockm>>>(C, n_rows);
-  MatMulKernel<<<dimGrid, dimBlock, sharedMem>>>(C, B, A, n_rows, n_cols);
+  zero_vector<float><<<numBlocksm, threadsPerBlockm>>>(C, n_rows);
+  MatMulKernel<float><<<dimGrid, dimBlock, sharedMem>>>(C, B, A, n_rows, n_cols);
 
   cudaDeviceSynchronize();
    
